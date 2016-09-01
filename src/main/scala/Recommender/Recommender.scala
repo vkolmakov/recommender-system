@@ -1,50 +1,46 @@
 package Recommender
 
 import org.apache.log4j.{Level, Logger}
-import org.apache.spark.rdd.RDD
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.sql.{Dataset, SparkSession}
+
 
 object Recommender extends App {
-    def removeDuplicateRatings(userRatingsPair: (Serialized.User, (Serialized.Rating, Serialized.Rating))): Boolean = {
-        val (_, ((item1, _), (item2, _))) = userRatingsPair
-        item1 < item2
-    }
-
-    def groupRatingPairs(userRatingsPair: (Serialized.User, (Serialized.Rating, Serialized.Rating))) = {
-        val (_, ((item1, rating1), (item2, rating2))) = userRatingsPair
-        ((item1, item2), (rating1, rating2))
-    }
-
-    def cosineSimilarity(ratingPairs: Iterable[(Double, Double)]): Serialized.Similarity = {
+    def cosineSimilarity(ratingPairs: Iterable[(Double, Double)]): Option[Similarity] = {
         val xx = ratingPairs.map({ case (x, _) => Math.pow(x, 2) }).reduce(_ + _)
         val yy = ratingPairs.map({ case (_, y) => Math.pow(y, 2) }).reduce(_ + _)
         val xy = ratingPairs.map({ case (x, y) => x * y }).reduce(_ + _)
         val count = ratingPairs.size
 
         xy match {
-            case xy if xy != 0 => (Math.sqrt(xx) * Math.sqrt(yy) / xy, count)
-            case _ => (0, count)
+            case xy if xy != 0 => Some(Similarity(xy / Math.sqrt(xx) * Math.sqrt(yy), count))
+            case _ => None
         }
     }
 
+    def getItemsRatingsPairs(userRatings: Dataset[UserRating]) = {
+        import spark.implicits._
+        val ratings = userRatings.map(ur => (ur.user.id, (ur.rating.itemId, ur.rating.value))).rdd
+        val ratingPairs = ratings.join(ratings)
+        ratingPairs.filter({ case (_, ((id1, _), (id2, _))) => id1 > id2})
+            .map({ case (_, ((id1, value1), (id2, value2))) => ((id1, id2), (value1, value2))})
+
+    }
+
     Logger.getLogger("org").setLevel(Level.ERROR)
-
-    val sparkConfig = new SparkConf()
-        .setMaster("local[*]")
-        .setAppName("Recommender")
-
-    implicit val sc = new SparkContext(sparkConfig)
+    implicit val spark = SparkSession
+        .builder()
+        .appName("Recommender")
+        .master("local[*]")
+        .getOrCreate()
 
     val itemsSource = File("./data/ml-100k/u.item", "|")
     val items = DataSource.items(itemsSource, 0, 1)
 
     val userRatingsSource = File("./data/ml-100k/u.data", "\t")
-    val userRatings: RDD[Serialized.UserRating] = DataSource.userRatings(userRatingsSource, 0, 1, 2)
-    val userRatingPairs = userRatings.join(userRatings).filter(removeDuplicateRatings)
-    val itemRatingPairs = userRatingPairs.map(groupRatingPairs).groupByKey()
-    val itemPairSimilarities = itemRatingPairs.mapValues(cosineSimilarity)
+    val userRatings: Dataset[UserRating] = DataSource.userRatings(userRatingsSource, 0, 1, 2)
 
-    itemPairSimilarities.take(10).foreach(println)
+    val itemRatingPairs = getItemsRatingsPairs(userRatings)
+    val itemSimilarities = itemRatingPairs.groupByKey().flatMapValues(cosineSimilarity)
 
-    sc.stop()
+    spark.stop()
 }
