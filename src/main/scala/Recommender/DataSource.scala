@@ -19,12 +19,12 @@ object DataSource {
             case File(path, delimeter) => {
                 spark.read.text(path).map(_.split(delimeter))
                     .map(field =>
-                    UserRating(User(field(userIdPosition).toInt),
-                               Rating(field(itemIdPosition).toInt, field(valuePosition).toDouble)))
+                        UserRating(User(field(userIdPosition).toInt),
+                           Rating(field(itemIdPosition).toInt, field(valuePosition).toDouble)))
             }
         }
     }
 }
 
 class DataSource
-case class File(path: String, delimeter: String) extends DataSource
+case class File(path: String, delimeter: Char) extends DataSource
