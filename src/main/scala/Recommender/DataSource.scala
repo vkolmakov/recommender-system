@@ -13,14 +13,14 @@ object DataSource {
             }
         }
     }
-    def userRatings(from: DataSource, userIdPosition: Int, itemIdPosition: Int, valuePosition: Int)(implicit spark: SparkSession): Dataset[UserRating] = {
+    def userRatings(from: DataSource, userIdPosition: Int, itemIdPosition: Int, valuePosition: Int)(implicit spark: SparkSession): Dataset[(User, Rating)] = {
         import spark.implicits._
         from match {
             case File(path, delimeter) => {
                 spark.read.text(path).map(_.split(delimeter))
                     .map(field =>
-                        UserRating(User(field(userIdPosition).toInt),
-                           Rating(field(itemIdPosition).toInt, field(valuePosition).toDouble)))
+                      (User(field(userIdPosition).toInt),
+                       Rating(field(itemIdPosition).toInt, field(valuePosition).toDouble)))
             }
         }
     }
