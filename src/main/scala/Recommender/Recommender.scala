@@ -4,9 +4,36 @@ import org.apache.log4j.{Level, Logger}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Dataset, SparkSession}
 
+case class Recommender(itemSource: DataSource, userRatingSource: DataSource)(implicit spark: SparkSession) {
+    private val items: Dataset[Item] = DataSource.items(itemSource, 0, 1)
+    private val userRatings: Dataset[(User, Rating)] = DataSource.userRatings(userRatingSource, 0, 1, 2)
 
-object Recommender extends App {
-    def cosineSimilarity(ratingPairs: Iterable[(Double, Double)]): Option[Similarity] = {
+    private val itemToItemSimilarities: RDD[((Int, Int), Similarity)] = build(itemSource, userRatingSource)
+
+    def recommendationsFor(itemId: Int) = {
+        import spark.implicits._
+        val TARGET_ITEM_ID = itemId
+        val relatedItems = itemToItemSimilarities
+            .filter(isRelatedSimilarity(TARGET_ITEM_ID))
+            .map(keepOtherSimilarity(TARGET_ITEM_ID))
+            .toDS()
+
+        val results = relatedItems.as("relatedItems")
+            .joinWith(items.as("items"), $"relatedItems._1" === $"items.id")
+            .map({ case ((_, similarity), item) => (item, similarity) })
+            .sort($"_2.value".desc)
+
+        results.take(10)
+    }
+
+    private def build(itemSource: DataSource, userRatingSource: DataSource) = {
+        val itemRatingPairs = getItemRatingPairs(userRatings)
+        val itemToItemSimilarities: RDD[((Int, Int), Similarity)] = itemRatingPairs.groupByKey().flatMapValues(cosineSimilarity)
+
+        itemToItemSimilarities
+    }
+
+    private def cosineSimilarity(ratingPairs: Iterable[(Double, Double)]): Option[Similarity] = {
         val xx = ratingPairs.map({ case (x, _) => Math.pow(x, 2) }).sum
         val yy = ratingPairs.map({ case (_, y) => Math.pow(y, 2) }).sum
         val xy = ratingPairs.map({ case (x, y) => x * y }).sum
@@ -18,7 +45,7 @@ object Recommender extends App {
         }
     }
 
-    def getItemRatingPairs(userRatings: Dataset[(User, Rating)]): RDD[((Int, Int), (Double, Double))] = {
+    private def getItemRatingPairs(userRatings: Dataset[(User, Rating)]): RDD[((Int, Int), (Double, Double))] = {
         import spark.implicits._
 
         val ratings = userRatings.map({ case (user, rating) => (user.id, (rating.itemId, rating.value)) }).rdd
@@ -28,7 +55,7 @@ object Recommender extends App {
         ratingPairs.map { case (_, ((id1, value1), (id2, value2))) => ((id1, id2), (value1, value2)) }
     }
 
-    def isRelatedSimilarity(targetItemId: Int, minSimilarityStrength: Int = 50, minSimilarityValue: Double = 0.90)(itemToItemSimilarity: ((Int, Int), Similarity)) = {
+    private def isRelatedSimilarity(targetItemId: Int, minSimilarityStrength: Int = 50, minSimilarityValue: Double = 0.90)(itemToItemSimilarity: ((Int, Int), Similarity)) = {
         val ((id1, id2), similarity) = itemToItemSimilarity
         val isRelated = id1 == targetItemId || id2 == targetItemId
         val isStrongEnough = similarity.strength > minSimilarityStrength && similarity.value > minSimilarityValue
@@ -36,42 +63,9 @@ object Recommender extends App {
         isRelated && isStrongEnough
     }
 
-    def keepOtherSimilarity(targetItemId: Int)(itemToItemSimilarity: ((Int, Int), Similarity)) = {
+    private def keepOtherSimilarity(targetItemId: Int)(itemToItemSimilarity: ((Int, Int), Similarity)) = {
         val ((id1, id2), similarity) = itemToItemSimilarity
 
         (if (id1 == targetItemId) id2 else id1, similarity)
     }
-
-    Logger.getLogger("org").setLevel(Level.ERROR)
-
-    implicit val spark = SparkSession
-        .builder()
-        .appName("Recommender")
-        .master("local[*]")
-        .getOrCreate()
-
-    import spark.implicits._
-
-    val itemsSource = File("./data/ml-100k/u.item", '|')
-    val items = DataSource.items(itemsSource, 0, 1)
-
-    val userRatingsSource = File("./data/ml-100k/u.data", '\t')
-    val userRatings: Dataset[(User, Rating)] = DataSource.userRatings(userRatingsSource, 0, 1, 2)
-
-    val itemRatingPairs = getItemRatingPairs(userRatings)
-    val itemToItemSimilarities: RDD[((Int, Int), Similarity)] = itemRatingPairs.groupByKey().flatMapValues(cosineSimilarity)
-
-    val TARGET_ITEM_ID = 50
-
-    val relatedItems = itemToItemSimilarities.filter(isRelatedSimilarity(TARGET_ITEM_ID))
-        .map(keepOtherSimilarity(TARGET_ITEM_ID))
-        .toDS()
-
-    val results = relatedItems.as("relatedItems").joinWith(items.as("items"), $"relatedItems._1" === $"items.id")
-        .map({ case ((_, similarity), item) => (item, similarity) })
-        .sort($"_2.value".desc)
-
-    results.take(10).foreach(println)
-
-    spark.stop()
 }
