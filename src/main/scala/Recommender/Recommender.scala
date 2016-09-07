@@ -5,18 +5,20 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Dataset, SparkSession}
 
 case class Recommender(itemSource: DataSource, userRatingSource: DataSource)(implicit spark: SparkSession) {
+
+    import spark.implicits._
+
     private val items: Dataset[Item] = DataSource.items(itemSource, 0, 1)
     private val userRatings: Dataset[(User, Rating)] = DataSource.userRatings(userRatingSource, 0, 1, 2)
 
-    private val itemToItemSimilarities: RDD[((Int, Int), Similarity)] = build(itemSource, userRatingSource)
+    private val itemToItemSimilarities: Dataset[((Int, Int), Similarity)] = build(itemSource, userRatingSource)
 
-    def recommendationsFor(itemId: Int) = {
-        import spark.implicits._
-        val TARGET_ITEM_ID = itemId
+    def recommendationsFor(item: Item): Array[(Item, Similarity)] = {
+        val TARGET_ITEM_ID = item.id
+
         val relatedItems = itemToItemSimilarities
-            .filter(isRelatedSimilarity(TARGET_ITEM_ID))
-            .map(keepOtherSimilarity(TARGET_ITEM_ID))
-            .toDS()
+            .filter(isRelatedSimilarity(TARGET_ITEM_ID)(_))
+            .map(keepOtherSimilarity(TARGET_ITEM_ID)(_))
 
         val results = relatedItems.as("relatedItems")
             .joinWith(items.as("items"), $"relatedItems._1" === $"items.id")
@@ -26,9 +28,13 @@ case class Recommender(itemSource: DataSource, userRatingSource: DataSource)(imp
         results.take(10)
     }
 
+    def recommendationsFor(user: User): Array[(Item, Similarity)] = {
+        ???
+    }
+
     private def build(itemSource: DataSource, userRatingSource: DataSource) = {
         val itemRatingPairs = getItemRatingPairs(userRatings)
-        val itemToItemSimilarities: RDD[((Int, Int), Similarity)] = itemRatingPairs.groupByKey().flatMapValues(cosineSimilarity)
+        val itemToItemSimilarities: Dataset[((Int, Int), Similarity)] = itemRatingPairs.groupByKey().flatMapValues(cosineSimilarity).toDS
 
         itemToItemSimilarities
     }
@@ -46,8 +52,6 @@ case class Recommender(itemSource: DataSource, userRatingSource: DataSource)(imp
     }
 
     private def getItemRatingPairs(userRatings: Dataset[(User, Rating)]): RDD[((Int, Int), (Double, Double))] = {
-        import spark.implicits._
-
         val ratings = userRatings.map({ case (user, rating) => (user.id, (rating.itemId, rating.value)) }).rdd
         val ratingPairs = ratings.join(ratings)
             .filter { case (_, ((id1, _), (id2, _))) => id1 < id2 }
