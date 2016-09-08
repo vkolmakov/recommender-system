@@ -1,4 +1,4 @@
-import Recommender.{File, Recommender, Item}
+import Recommender.{File, Recommender, Item, User}
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.sql.SparkSession
 
@@ -11,12 +11,14 @@ object Main extends App {
         .master("local[*]")
         .getOrCreate()
 
-    val itemsSource = File("./data/ml-100k/u.item", '|')
-    val userRatingsSource = File("./data/ml-100k/u.data", '\t')
-    val recommender = Recommender(itemsSource, userRatingsSource)
+    val itemSource = File("./data/ml-100k/u.item", '|')
+    val userRatingSource = File("./data/ml-100k/u.data", '\t')
+    val recommender = Recommender(itemSource, userRatingSource)
 
     val selectedItem: Item = Item(50, "Star Wars")
+    val selectedUser: User = User(0)
 
+    recommender.recommendationsFor(selectedUser).foreach(println)
     recommender.recommendationsFor(selectedItem).foreach(println)
 
     spark.stop()

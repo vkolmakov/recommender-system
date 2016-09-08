@@ -4,6 +4,7 @@ import org.apache.log4j.{Level, Logger}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Dataset, SparkSession}
 
+
 case class Recommender(itemSource: DataSource, userRatingSource: DataSource)(implicit spark: SparkSession) {
 
     import spark.implicits._
@@ -12,6 +13,10 @@ case class Recommender(itemSource: DataSource, userRatingSource: DataSource)(imp
     private val userRatings: Dataset[(User, Rating)] = DataSource.userRatings(userRatingSource, 0, 1, 2)
 
     private val itemToItemSimilarities: Dataset[((Int, Int), Similarity)] = build(itemSource, userRatingSource)
+
+    private val minSimilarityStrength: Int = 50
+    private val minSimilarityValue: Double = 0.90
+    private val minRatingValue: Double = 3.0
 
     def recommendationsFor(item: Item): Array[(Item, Similarity)] = {
         val TARGET_ITEM_ID = item.id
@@ -29,7 +34,25 @@ case class Recommender(itemSource: DataSource, userRatingSource: DataSource)(imp
     }
 
     def recommendationsFor(user: User): Array[(Item, Similarity)] = {
-        ???
+        val ratings = userRatings
+            .filter(ur => ur._1.id == user.id && ur._2.value > minRatingValue)
+            .map({ case (_, rating) => rating })
+
+        val itemIds = ratings.as("rr")
+            .joinWith(items.as("items"), $"rr.itemId" === $"items.id")
+            .map({ case (rating, item) => item.id })
+            .collect()
+
+        val relatedItems = itemToItemSimilarities
+            .filter(isRelatedSimilarity(itemIds)(_))
+            .map(keepOtherSimilarity(itemIds)(_))
+
+        val results = relatedItems.as("relatedItems")
+            .joinWith(items.as("items"), $"relatedItems._1" === $"items.id")
+            .map({ case ((_, similarity), item) => (item, similarity) })
+            .sort($"_2.value".desc)
+
+        results.take(10)
     }
 
     private def build(itemSource: DataSource, userRatingSource: DataSource) = {
@@ -59,17 +82,31 @@ case class Recommender(itemSource: DataSource, userRatingSource: DataSource)(imp
         ratingPairs.map { case (_, ((id1, value1), (id2, value2))) => ((id1, id2), (value1, value2)) }
     }
 
-    private def isRelatedSimilarity(targetItemId: Int, minSimilarityStrength: Int = 50, minSimilarityValue: Double = 0.90)(itemToItemSimilarity: ((Int, Int), Similarity)) = {
+    private def isRelatedSimilarity(itemId: Int)(itemToItemSimilarity: ((Int, Int), Similarity)) = {
         val ((id1, id2), similarity) = itemToItemSimilarity
-        val isRelated = id1 == targetItemId || id2 == targetItemId
+        val isRelated = id1 == itemId || id2 == itemId
         val isStrongEnough = similarity.strength > minSimilarityStrength && similarity.value > minSimilarityValue
 
         isRelated && isStrongEnough
     }
 
-    private def keepOtherSimilarity(targetItemId: Int)(itemToItemSimilarity: ((Int, Int), Similarity)) = {
+    private def isRelatedSimilarity(itemIds: Array[Int])(itemToItemSimilarity: ((Int, Int), Similarity)) = {
+        val ((id1, id2), similarity) = itemToItemSimilarity
+        val isRelated = itemIds.contains(id1) || itemIds.contains(id2)
+        val isStrongEnough = similarity.strength > minSimilarityStrength && similarity.value > minSimilarityValue
+
+        isRelated && isStrongEnough
+    }
+
+    private def keepOtherSimilarity(itemId: Int)(itemToItemSimilarity: ((Int, Int), Similarity)) = {
         val ((id1, id2), similarity) = itemToItemSimilarity
 
-        (if (id1 == targetItemId) id2 else id1, similarity)
+        (if (id1 == itemId) id2 else id1, similarity)
+    }
+
+    private def keepOtherSimilarity(itemIds: Array[Int])(itemToItemSimilarity: ((Int, Int), Similarity)) = {
+        val ((id1, id2), similarity) = itemToItemSimilarity
+
+        (if (itemIds.contains(id1)) id2 else id1, similarity)
     }
 }
