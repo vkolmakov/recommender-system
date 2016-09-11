@@ -18,8 +18,8 @@ object Main extends App {
     val selectedItem: Item = Item(50, "Star Wars")
     val selectedUser: User = User(0)
 
-    recommender.recommendationsFor(selectedUser).foreach(println)
-    recommender.recommendationsFor(selectedItem).foreach(println)
+    recommender.recommendationsForUser(selectedUser).foreach(println)
+    recommender.recommendationsForItem(selectedItem).foreach(println)
 
     spark.stop()
 }
