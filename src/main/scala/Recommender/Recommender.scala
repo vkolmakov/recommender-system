@@ -1,6 +1,5 @@
 package Recommender
 
-import org.apache.log4j.{Level, Logger}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Dataset, SparkSession}
 
@@ -11,8 +10,8 @@ object Recommender {
 
         import spark.implicits._
 
-        private val items: Dataset[Item] = DataSource.items(itemSource, 0, 1)
-        private val userRatings: Dataset[(User, Rating)] = DataSource.userRatings(userRatingSource, 0, 1, 2)
+        private val items: Dataset[Item] = DataSource.items(itemSource)
+        private val userRatings: Dataset[(User, Rating)] = DataSource.userRatings(userRatingSource)
 
         private val itemToItemSimilarities: Dataset[((Int, Int), Similarity)] = build(itemSource, userRatingSource).cache()
 
